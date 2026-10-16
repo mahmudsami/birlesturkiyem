@@ -109,6 +109,27 @@
     content: ""; position: absolute; left: 4px; top: .62em;
     width: 9px; height: 9px; border-radius: 3px; background: var(--box);
   }
+  /* short stage (phones in portrait): the title card has to fit inside it */
+  .compact .card { padding: 10px 12px 12px; }
+  .compact #hero { display: none; }
+  .compact #title .lead { margin-bottom: 8px; }
+  .compact .rules { font-size: 12.5px; line-height: 1.35; margin-bottom: 10px; }
+  .compact .rules li { padding: 2px 0 2px 20px; }
+  .compact #start { min-height: 46px; }
+  .compact .r-head { font-size: 17px; margin-bottom: 6px; }
+  .compact .r-stats b { font-size: 24px; }
+  .compact .r-line { font-size: 12px; margin-top: 2px; }
+  @container (max-width: 335px) {
+    .compact .rules { font-size: 11.5px; line-height: 1.3; margin-bottom: 8px; }
+    .compact #title h1 { margin-bottom: 2px; }
+    .compact #title .lead { margin-bottom: 4px; font-size: 12px; }
+    .compact #start { min-height: 42px; }
+  }
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 10px; }
+  .mode { border: 2px solid var(--box); background: transparent; color: var(--ink); border-radius: 10px; padding: 7px 2px; font-weight: 700; font-size: 13px; cursor: pointer; }
+  .mode[aria-pressed="true"] { background: var(--box); color: #fff; }
+  .compact .modes { margin-bottom: 8px; }
+  .compact .mode { padding: 5px 2px; font-size: 12px; }
   #result { justify-content: flex-start; }
   #result .card { padding: 12px 12px 12px; cursor: pointer; }
   .r-tap { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
@@ -133,9 +154,14 @@
         <h1>Birleş Türkiyem</h1>
         <p class="lead">İlleri kutuya doldur</p>
         <canvas id="hero" aria-hidden="true"></canvas>
+        <div class="modes" id="modes">
+          <button class="mode" type="button" data-mode="easy">Kolay</button>
+          <button class="mode" type="button" data-mode="normal">Normal</button>
+          <button class="mode" type="button" data-mode="hard">İlle de</button>
+        </div>
         <ul class="rules">
           <li>Komşu parçalar değince birleşir</li>
-          <li>Yarısından küçük bir parçayla birleşemezsin (onu saran parça ve komşuları hep büyük gruplarda kalan iller hariç)</li>
+          <li id="rule-mode"></li>
           <li>Karıştır ile kutuyu salla</li>
           <li>Parçalar kırmızı çizgiyi aşıp kalırsa oyun biter</li>
           <li>81 ili birleştirip Türkiye'yi tamamla, yeni tura geç</li>
@@ -738,8 +764,24 @@ function bordering(x, y) {
 // bordering pieces merge on any touch, but a piece cannot merge with a piece smaller than BALANCE_RATIO of its size,
 // unless the bigger one completely surrounds the smaller one
 const BALANCE_RATIO = 0.5;
-function canMerge(a, b) {
+// modes: easy = no balance rule; normal = balance rule; hard = no balance rule, but groups must touch with provinces
+// where the touching province borders the other piece (at least one such contact), other touches do not count
+const MODES = {
+  easy: { balance: false, exact: false, rule: 'Komşu parçalar herhangi bir yerinden değince birleşir' },
+  normal: { balance: true, exact: false, rule: 'Yarısından küçük parçayla birleşemezsin (saran parça ve komşuları hep büyük gruplarda kalan iller hariç)' },
+  hard: { balance: false, exact: true, rule: 'Gruplar, değen ilin diğer parçaya komşu olduğu yerden değince birleşir' },
+};
+let mode = 'normal';
+try { const m = localStorage.getItem('birles-mode'); if (m && MODES[m]) mode = m; } catch (_) { /* ignore */ }
+function canMerge(a, b, ca, cb) {
   if (!bordering(a, b)) return false;
+  const m = MODES[mode];
+  if (m.exact && (a.piece.codes.length > 1 || b.piece.codes.length > 1)) {
+    // the touching province of one side must border the other piece (not necessarily the very province it touches)
+    const aBorders = b.piece.codes.some((c) => ADJM[ca]?.has(c)), bBorders = a.piece.codes.some((c) => ADJM[cb]?.has(c));
+    if (!aBorders && !bBorders) return false;
+  }
+  if (!m.balance) return true;
   const [big, small] = a.piece.codes.length >= b.piece.codes.length ? [a, b] : [b, a];
   return small.piece.codes.length >= big.piece.codes.length * BALANCE_RATIO || enclosedBy(small, big) || stranded(small);
 }
@@ -760,15 +802,15 @@ function onPairs(e) {
   for (const pr of e.pairs) {
     const a = pr.bodyA.parent, b = pr.bodyB.parent;
     if (a === b || !a.piece || !b.piece) continue;
-    if (canMerge(a, b)) pending.push([a, b]);
+    if (canMerge(a, b, pr.bodyA.code, pr.bodyB.code)) pending.push([a, b, pr.bodyA.code, pr.bodyB.code]);
   }
 }
 function resolveMerges() {
   if (!pending.length) return;
   const used = new Set();
-  for (const [a, b] of pending) {
+  for (const [a, b, ca, cb] of pending) {
     if (used.has(a) || used.has(b) || !pieces.includes(a) || !pieces.includes(b)) continue;
-    if (!canMerge(a, b)) continue;
+    if (!canMerge(a, b, ca, cb)) continue;
     used.add(a); used.add(b);
     merge(a, b);
   }
@@ -1571,6 +1613,7 @@ function layout() {
   cv.style.width = cssW + 'px'; cv.style.height = cssH + 'px';
   cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
   $('stage').style.width = cssW + 'px'; $('stage').style.height = cssH + 'px';
+  $('stage').classList.toggle('compact', cssH < 470);
   $('controls').style.width = cssW + 'px';
   drawHero();
 }
@@ -1676,6 +1719,16 @@ cv.addEventListener('pointerup', (e) => {
 });
 cv.addEventListener('pointercancel', () => { aiming = false; pointerTop = false; });
 cv.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !aiming) pointerTop = false; });
+function showMode() {
+  document.querySelectorAll('.mode').forEach((el) => el.setAttribute('aria-pressed', String(el.dataset.mode === mode)));
+  $('rule-mode').textContent = MODES[mode].rule;
+}
+document.querySelectorAll('.mode').forEach((el) => el.addEventListener('click', () => {
+  mode = el.dataset.mode;
+  try { localStorage.setItem('birles-mode', mode); } catch (_) { /* ignore */ }
+  showMode();
+}));
+showMode();
 $('start').addEventListener('click', startGame);
 $('retry').addEventListener('click', () => { if (!resultLocked()) startGame(); });
 $('shuffle').addEventListener('click', startShake);
